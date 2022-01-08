@@ -1,0 +1,318 @@
+#!/usr/bin/env python
+
+from __future__ import print_function, division
+# from autoaugment import RandAugment
+from randaugment import RandAugment, ImageNetPolicy
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.optim import lr_scheduler
+import numpy as np
+import torchvision
+from torchvision import datasets, models, transforms
+import matplotlib.pyplot as plt
+import time
+import os
+import copy
+
+#remember to change the path before running! with '/' in the end
+path = "/home/hlcv_team030/hlcv_team030/Image_Classification"
+test_path = "/home/hlcv_team030/hlcv_team030/Image_Classification"
+output_images_path = "/home/hlcv_team030/hlcv_team030/output_images/"
+#Folds are fixed, each folder contains split 4 folds in the training and 1 fold in the val
+folds = ['/data/fold1', '/data/fold2', '/data/fold3', '/data/fold4', '/data/fold5']
+
+# Methods/Functions
+
+
+def load_data(data_dir="Image_Classification/"):
+    # This function loads the data and prepares it.
+    # Expected format of directory: two directories 'train', 'val' each with a folder for each class
+
+    # Data augmentation and normalization for training
+    # Just normalization for validation
+    data_transforms = {
+        'train': transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(p=0.5),
+            # transforms.ColorJitter(brightness=0.5),
+            # transforms.RandomGrayscale(p=0.2),
+            ImageNetPolicy(),  # Randomly choose one of the best 24 Sub-policies on ImageNet
+            # transforms.AutoAugment(),
+            RandAugment(),
+            # randaugment is adaptived from UDA tensorflow implementation: # https://github.com/jizongFox/uda
+            # iaa.RandAugment(n=3, m=7),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ]),
+        'val': transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ]),
+
+        'test': transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ]),
+
+    }
+
+    image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x),
+                                              data_transforms[x])
+                      for x in ['train', 'val']}
+    
+    test_datasets={'test':datasets.ImageFolder(os.path.join(test_path, 'test'),
+                                              data_transforms['test'])}
+    
+    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=4,
+                                                  shuffle=True, num_workers=4)
+                   for x in ['train', 'val']}
+    
+    test_loader= {'test': torch.utils.data.DataLoader(test_datasets['test'], batch_size=4,
+                                                  shuffle=True, num_workers=4)}
+    
+    dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
+
+    class_names = image_datasets['train'].classes
+
+    return dataloaders,test_loader, dataset_sizes, class_names
+
+def imshow(inp, title=None, save_dir="/1.png"):
+    # show an image
+    """Imshow for Tensor."""
+    inp = inp.numpy().transpose((1, 2, 0))
+    mean = np.array([0.485, 0.456, 0.406])  # update
+    std = np.array([0.229, 0.224, 0.225])  # update
+    inp = std * inp + mean
+    inp = np.clip(inp, 0, 1)
+    plt.imshow(inp)
+    if title is not None:
+        plt.title(title)
+    plt.savefig(save_dir, format="png", bbox_inches='tight')  # tight stops savefig from cropping long title
+    plt.show()
+
+
+def train_model(model,dataloaders ,dataset_sizes, criterion, optimizer, scheduler, epsilon=1e-7, num_epochs=25):
+    # This function trains the model
+
+    since = time.time()
+
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_acc = 0.0
+
+    for epoch in range(num_epochs):
+        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+        print('-' * 10)
+
+        # Each epoch has a training and validation phase
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                model.train()  # Set model to training mode
+            else:
+                model.eval()  # Set model to evaluate mode
+
+            TP, TN, FN, FP = 0, 0, 0, 0
+            running_loss = 0.0
+            running_corrects = 0
+
+            # Iterate over data.
+            for inputs, labels in dataloaders[phase]:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # forward
+                # track history if only in train
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs = model(inputs)
+                    _, preds = torch.max(outputs, 1)
+                    loss = criterion(outputs, labels)
+
+                    # backward + optimize only if in training phase
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+
+                # statistics
+
+                running_loss += loss.item() * inputs.size(0)
+                running_corrects += torch.sum(preds == labels.data)
+
+                # TP predict and label are 1 at the same time
+                TP += ((preds == 1) & (labels.data == 1)).cpu().sum()
+                # TN predict and label are both 0
+                TN += ((preds == 0) & (labels.data == 0)).cpu().sum()
+                # FN    predict 0 label 1
+                FN += ((preds == 0) & (labels.data == 1)).cpu().sum()
+                # FP    predict 1 label 0
+                FP += ((preds == 1) & (labels.data == 0)).cpu().sum()
+
+            if phase == 'train':
+                scheduler.step()
+
+            # y_pred=preds
+            # y_true=labels.data
+
+            # tp = (y_true * y_pred).sum().to(torch.float32)
+            # tn = ((1 - y_true) * (1 - y_pred)).sum().to(torch.float32)
+            # fp = ((1 - y_true) * y_pred).sum().to(torch.float32)
+            # fn = (y_true * (1 - y_pred)).sum().to(torch.float32)
+            # epsilon = 1e-7
+            # precision = tp / (tp + fp + epsilon)
+            # recall = tp / (tp + fn + epsilon)
+            # f1 = 2* (precision*recall) / (precision + recall + epsilon)
+
+            p = TP / (TP + FP)
+            r = TP / (TP + FN)
+            F1 = 2 * r * p / (r + p)
+            acc = (TP + TN) / (TP + TN + FP + FN)
+            # print(acc.item())
+            epoch_loss = running_loss / dataset_sizes[phase]
+            epoch_acc = running_corrects.double() / dataset_sizes[phase]
+
+            print('{} Loss: {:.4f} Acc: {:.4f}  F1_score:{:.4f}'.format(
+                phase, epoch_loss, epoch_acc, F1))
+
+            # deep copy the model
+            if phase == 'val' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                best_model_wts = copy.deepcopy(model.state_dict())
+
+        print()
+
+    time_elapsed = time.time() - since
+    print('Training complete in {:.0f}m {:.0f}s'.format(
+        time_elapsed // 60, time_elapsed % 60))
+    print('Best val Acc: {:4f}'.format(best_acc))
+
+    # load best model weights
+    model.load_state_dict(best_model_wts)
+    return model
+
+
+def visualize_model(model, num_images=6, out_dir="", title=""):
+    was_training = model.training
+    model.eval()
+    images_so_far = 0
+    fig = plt.figure()
+
+    with torch.no_grad():
+        for i, (inputs, labels) in enumerate(dataloaders['val']):
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+
+            outputs = model(inputs)
+            _, preds = torch.max(outputs, 1)
+
+            for j in range(inputs.size()[0]):
+                images_so_far += 1
+                ax = plt.subplot(num_images // 2, 2, images_so_far)
+                ax.axis('off')
+                ax.set_title('predicted: {}'.format(class_names[preds[j]]))
+                imshow(inputs.cpu().data[j],
+                       save_dir=out_dir + "{}_{}_predicted:{}.png".format(title, i, class_names[preds[j]]),
+                       title="{}_{}_predicted:{}.png".format(title, i, class_names[preds[j]]))
+
+                if images_so_far == num_images:
+                    model.train(mode=was_training)
+                    return
+        model.train(mode=was_training)
+
+
+def test_model(test_loader):
+    # TODO: implement test and test accuracy evaluation
+    with torch.no_grad():
+        correct = 0
+    total = 0
+    for images, labels in test_loader['test']:
+        images = images.to(device)
+        labels = labels.to(device)
+        outputs = model_conv(images)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+        if total == 1000:
+            break
+
+    print('Accuracy of the network on the {} test images: {} %'.format(total, 100 * correct / total))
+
+
+    
+#itertae the folds :
+
+for fold in folds:
+    print("Fold:", fold)
+    data_dir = path + fold
+    dataloaders,test_loader, dataset_sizes, class_names = load_data(data_dir)
+
+    # Get a batch of training data
+    inputs, classes = next(iter(dataloaders['train']))
+
+    # Make a grid from batch
+    out = torchvision.utils.make_grid(inputs)
+
+    # show images
+    imshow(out, title=[class_names[x] for x in classes], save_dir=output_images_path + "fold" + fold[-1] + ".png")
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    # Visualize some training data
+
+    model_ft = models.resnet50(pretrained=True,progress=True)
+    num_ftrs = model_ft.fc.in_features
+    # Here the size of each output sample is set to 2.
+    # Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
+    model_ft.fc = nn.Linear(num_ftrs, len(class_names))
+
+    model_ft = model_ft.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+
+    # Observe that all parameters are being optimized
+    optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+
+    # Decay LR by a factor of 0.1 every 7 epochs
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
+
+    ##Train only last Fully Connected Layer
+
+    model_ft = train_model(model_ft,dataloaders, dataset_sizes, criterion, optimizer_ft, exp_lr_scheduler, num_epochs=2)
+
+    visualize_model(model_ft, title="visualize_model_fc_only_fold{}".format(fold[-1]), out_dir=output_images_path)
+
+    model_conv = torchvision.models.resnet50(pretrained=True, progress=True)
+    for param in model_conv.parameters():
+        param.requires_grad = False
+
+    # Parameters of newly constructed modules have requires_grad=True by default
+    num_ftrs = model_conv.fc.in_features
+    model_conv.fc = nn.Linear(num_ftrs, len(class_names))
+
+    model_conv = model_conv.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+
+    # Observe that only parameters of final layer are being optimized as
+    # opposed to before.
+    optimizer_conv = optim.SGD(model_conv.fc.parameters(), lr=0.001, momentum=0.9)
+
+    # Decay LR by a factor of 0.1 every 7 epochs
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer_conv, step_size=7, gamma=0.1)
+
+    model_conv = train_model(model_conv,dataloaders ,dataset_sizes, criterion, optimizer_conv,
+                             exp_lr_scheduler, num_epochs=2)
+
+    visualize_model(model_conv, title="visualize_model_fc_only_fold{}".format(fold[-1]), out_dir=output_images_path)
+
+    plt.ioff()
+    plt.show()
+
+    #test the model
+    test_model(test_loader)
