@@ -1,15 +1,6 @@
 # Sesame-Plant-Disease-Classification
-This project is created for the High Level Computer Vision Class of 2021 at the University of Saarland. The goal of the proposed project is to improve on a previous model for detecting disease in sesame plants. Given the small size of the dataset, the previous method has been reported to overfit. Hence, in the proposed project, two methods will be explored to overcome this issue: transfer learning and self-supervised learning.
 
-Important links:
-Report document:
-https://docs.google.com/document/d/1Z0LYjFAskV19uPT_MVw5o6wKTDeXSEGCM6fDBlItT74/edit?usp=sharing
-
-Proposal slides:
-https://docs.google.com/presentation/d/1s2cXhTivz7189DOhyrV_TxUIeo0xn_hmgdaXHA4YkBI/edit?usp=sharing
-
-Colab code:
-https://colab.research.google.com/drive/1GnEJkmt5jJZPwHhyNZVVNyJo_k107fez?usp=sharing
+In  this  project we explore  the  plant  disease  classification77problem on a dataset of sesame leaves of 1453 images, containing three88classes,  including  healthy  plants.  Resnet50  architecture  pre-trained  on99ImageNet was used, in combination with other methods and techniques1010to increase the test accuracy and overcome overfitting and the challenge1111of  small  dataset  size.  Experiments  using  data  augmentation,  transfer1212learning and self-supervised pre-training were carried out. Empirical re-1313sults  showed  that  data  augmentation  and  multi-step  transfer  learning1414with a dataset that shares similarity (both are leaves in this case) showed1515the best performance (pre-trained weights on ImageNet, followed by pre-1616training on the Cassava Leaf Challenge dataset), reaching an accuracy of171796.71%. Adding a self-supervised angle classification pre-training phase1818decreased the performance, which can be explained by the learned fea-1919tures being less useful than the ones from transfer learning. Experiments2020on freezing the model and training only the last layer were also performed2121and analyzed, achieving a result of 90.9%. The significantly high success2222rate makes the model a very useful advisory or early warning tool, and an2323approach that could be further expanded to support an integrated plant2424disease identification system to operate in real cultivation conditions
 
 Sesame Dataset:
 https://drive.google.com/drive/folders/1f3YgVhelsXuyeCosMlKFpiCwrSzcLPxl?usp=sharing
